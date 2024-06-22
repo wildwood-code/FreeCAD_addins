@@ -1,0 +1,189 @@
+"""
+This macro will generate aliases for cells in column B based upon a
+parameter name in column A. It has a few features to help control
+the behavior.
+
+This macro will operate on sheets with a certain name (case-insensitive):
+  Params, Param, P, Params_<anything>, Param_<anything>, P_<anything>
+It will operate on all sheets matching the naming pattern
+
+Rows will be processed starting at row 1 and continuing until a
+termination condition is met. Termination occurs after 10 consecutive
+rows all having the column A cell contants blank, or if the cell contents
+begin with two or more dashes:
+ex/ --, --END--, --- END PARAMETERS ---, -----
+
+Any column A cell contents having an invalid param name is skipped.
+A valid param name starts with a letter, has an optional underscore,
+and is followed by at least one letter, number, or underscore.
+(ex/ W_base, T_main_assembly)
+Certain param names will be rejected, even if otherwise valid:
+Param or Params (case-insensitive) as these are often used as a header label
+One or two letters followed only by numbers as these are cell coordinates
+
+If a valid param name is found in column A, then the alias is applied
+to the cell in the same row in column B. The contents of the cell are unchaged.
+However, the formatting is automatically changed when applying an alias.
+
+This macro will only change the alias of a cell if it is blank or different.
+Note that if the alias is changed, any references to that alias in the part
+or body will revert to a cell reference rather than an alias.
+
+It may be run repeatedly on the spreadsheet.
+
+A short text report is emitted from the macro showing the changes, if any.
+
+Kerry S. Martin, martin@wild-wood.net   2024-06-18
+
+"""
+import FreeCAD
+import re
+
+
+# any of the following commonly used parameter sheet names may be used
+RE_SHEET_NAMES = re.compile(r'^(?:P(?:_.*)?|PARAMs?(?:_.*)?)$', re.IGNORECASE)
+
+# number of consecutive blank rows to terminate alias generation
+BLANK_ROWS = 10
+
+# regex pattern to match valid param name
+RE_NAME = re.compile(r'^[A-Z]_?[A-Z0-9_]+$', re.IGNORECASE)
+
+# regex pattern to match param names in column A to reject
+RE_NAME_REJECT = re.compile(r'^(?:[A-Z]{1,2}[0-9]+|PARAMs?)$', re.IGNORECASE)
+
+# regex pattern to match termination marker
+RE_TERMINATE = re.compile(r'^-{2,}')
+
+
+# change_alias(param_sheet, value_cell, alias, is_overwrite)
+#
+#  Changes the alias assigned to value_cell. If is_overwrite is True,
+#  it will first clear the alias and then change it. This is to
+#  prevent some reported issues from changing it directly.
+#
+#  Returns True if the alias was changed successfully, False otherwise
+#
+def change_alias(param_sheet, value_cell, alias, is_overwrite=False):
+	result = True
+	try:
+		if is_overwrite:
+			# clear the existing alias first, then recompute
+			param_sheet.setAlias(value_cell, '')
+			App.ActiveDocument.recompute()
+		# set the new alias
+		param_sheet.setAlias(value_cell, alias)
+		App.ActiveDocument.recompute()
+	except:
+		# could be an invalid alias name or a duplicate alias
+		result = False
+
+	return result
+
+
+# realias_sheet(param_sheet)
+#
+#  Process all parameter alias names in the spreadsheet
+#
+def realias_sheet(param_sheet):
+	row = 0
+	blank_rows = 0
+	had_change = False
+	
+	while True:
+	
+		# process each row until termination condition is met
+		row += 1
+	
+		param_cell = f'A{row}'
+		value_cell = f'B{row}'
+		
+		value_contents = None   # contents of the param_cell (may or may not be a param name)
+	
+		try:
+	
+			value_contents = param_sheet.get(param_cell)
+	
+			if len(value_contents) > 0:
+				blank_rows = 0  # reset blank cell counter
+			else:
+				# blank cell
+				blank_rows += 1
+				if blank_rows >= BLANK_ROWS:
+					# we have encountered the blank cell termination condition
+					break
+	
+		except:
+	
+			# empty cell -> interpret as blank line
+			blank_rows += 1
+			if blank_rows >= BLANK_ROWS:
+				# we have encountered the blank row termination condition
+				break
+	
+			continue
+	
+		if RE_NAME_REJECT.match(value_contents):
+	
+			# skip any cell named simply "Param"... it is probably a header row
+			# modify the RE_NAME_REJECT regex pattern to specify others to reject
+			continue
+	
+		elif RE_NAME.match(value_contents):
+	
+			# we have a valid param name in column A
+			# check for an existing alias
+			alias = param_sheet.getAlias(value_cell)
+	
+			if alias is not None:
+				if alias == value_contents:
+					# already set, nothing to do
+					continue
+				else:
+					# change it to the new name (assume it was already a valid value at some point)
+					if change_alias(param_sheet, value_cell, value_contents, is_overwrite=True):
+						had_change = True
+						print(f'Changed the alias on cell {value_cell} to {value_contents} in sheet "{param_sheet.Label}"')
+					else:
+						print(f'Unable to change the alias on cell {value_cell} to {value_contents} in sheet "{param_sheet.Label}"')
+					
+					continue
+			else:
+				# for now, just set the alias
+				if change_alias(param_sheet, value_cell, value_contents):
+					had_change = True
+					print(f'Added a new alias on cell {value_cell} as {value_contents} in sheet "{param_sheet.Label}"')
+				else:
+					print(f'Unable to add the new alias on cell {value_cell} as {value_contents} in sheet "{param_sheet.Label}"')
+				
+				continue
+			
+		elif RE_TERMINATE.match(value_contents):
+			# we found the termination marker
+			break
+	
+		else:
+			continue
+	
+	if not had_change:
+	
+		print(f'No new changes were made to the spreadsheet aliases in sheet "{param_sheet.Label}"')
+
+
+# ------------------------------------------------------------------------------
+# Main program entry point
+# ------------------------------------------------------------------------------
+
+# Find the parameter sheets and re-alias them
+param_sheet = None
+
+for obj in App.ActiveDocument.Objects:
+	if obj.TypeId == 'Spreadsheet::Sheet' and RE_SHEET_NAMES.match(obj.Label):
+		param_sheet = obj
+		realias_sheet(param_sheet)
+
+if param_sheet is None:
+	print('No valid sheet name was found')
+	
+
+# Kerry S. Martin, martin@wild-wood.net, June 18, 2024
