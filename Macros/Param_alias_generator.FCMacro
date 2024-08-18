@@ -31,9 +31,19 @@ or body will revert to a cell reference rather than an alias.
 
 It may be run repeatedly on the spreadsheet.
 
+In addition to changing the alias, the macro will attempt to change the display
+name of the value cell in column B if an accepted unit is specified in the cell
+contents. For example, if "4.5 mm" is entered, the display unit is changed to
+"mm" and the cell contents is changed to simply "4.5". If the value is subsequently
+changed by the user, the units will not need to be retyped.
+Note that this only works correctly for the base units (mm and deg).
+
+Finally, the value cell in column B will be shaded gray if it is specified as
+a calculated cell buy leading the description in column C with "[calculated]".
+
 A short text report is emitted from the macro showing the changes, if any.
 
-Kerry S. Martin, martin@wild-wood.net   2024-06-18
+Kerry S. Martin, martin@wild-wood.net   2024-08-18
 
 """
 import FreeCAD
@@ -41,7 +51,7 @@ import re
 
 
 # any of the following commonly used parameter sheet names may be used
-RE_SHEET_NAMES = re.compile(r'^(?:P(?:_.*)?|PARAMs?(?:_.*)?)$', re.IGNORECASE)
+RE_SHEET_NAMES = re.compile(r'^(?:P(?:_.*)?|PARAMs?(?:_.*)?|SPREADSHEET)$', re.IGNORECASE)
 
 # number of consecutive blank rows to terminate alias generation
 BLANK_ROWS = 10
@@ -55,12 +65,130 @@ RE_NAME_REJECT = re.compile(r'^(?:[A-Z]{1,2}[0-9]+|PARAMs?)$', re.IGNORECASE)
 # regex pattern to match termination marker
 RE_TERMINATE = re.compile(r'^-{2,}')
 
+# regex pattern to capture base value and unit from cell contents
+# the contents must be a scientific number followed by a space then a alpha unit
+RE_CONTENTS_UNIT = re.compile(r'^=?([-+0-9.eE]+)\s+(\S+)$')
+
+# regex pattern to pull the column (letter) and row (number) from a cell reference
+# ex/ AB12 -> group(1) = 'AB' = column, group(2) = '12' = row
+RE_CELL_DISSECT = re.compile(r'^([A-Za-z]{1,2})([0-9]+)$')
+
+# regex pattern to match a "[calculated]" tag in the description column
+# description column follows the value column
+# start the description with "[calculated]" to designate that the value is calculated
+# and the cell will be shaded gray
+RE_DESC_CALCULATED = re.compile(r"^'?\[CALC(?:ULATED)?\]", re.IGNORECASE)
+
+# regex pattern to match accepted display units
+# add any additional display units that are needed to this regex
+RE_ACCEPTED_DISPLAY_UNITS = re.compile(r"^(?:mm|deg|°)$")
+
+
+# increment_column(cell)
+#
+# Increments the column index to the column to the right of the given cell
+# The row is unchanged
+#
+# ex/ "B15" -> "C15",  "Z7" -> "AA27"
+#
+def increment_column(cell):
+
+	next_cell = None
+	m = RE_CELL_DISSECT.match(cell)
+
+	if m is not None:
+		my_col = m.group(1)
+		my_row = m.group(2)
+
+		if len(my_col)>1:
+			# format 'AA' - 'ZZ', possible wrap "AZ" -> "BZ", etc
+			# fail if 'ZZ'
+			my_col_a = my_col[0]
+			my_col_b = my_col[1]
+			my_col_b = chr(ord(my_col_b)+1)
+			if my_col_b > "Z":
+				my_col_b = "A"
+				my_col_a = chr(ord(my_col_a)+1)
+				if my_col_a <= "Z":
+					my_col = my_col_a + my_col_b
+				else:
+					my_col = None
+		else:
+			# format 'A' - 'Z', possible wrap from "Z" to "AA"
+			my_col = chr(ord(my_col)+1)
+			if my_col>"Z":
+				my_col = "AA"
+
+		if my_col is not None:
+			next_cell = my_col + my_row
+
+	return next_cell
+
+
+# change_display_unit(param_sheet, value_cell)
+#
+# Changes the display unit property for the given value cell if the cell
+# is a numeric entry field with a unit. This allows efficient definition
+# of new parameter values.
+#
+# This willl only change the display unit if it is not already set
+# This will only change if the unit is a commonly used 3D CAD unit (e.g., mm, cm, in, deg, etc.)
+# More specific units can be added to the regex RE_ACCEPTED_DISPLAY_UNITS
+#
+def change_display_unit(param_sheet, value_cell):
+
+	result = False
+	my_unit = param_sheet.getDisplayUnit(value_cell)
+
+	if my_unit is None:
+		#my_cell = param_sheet.get(value_cell)
+		my_contents = param_sheet.getContents(value_cell)
+		m = RE_CONTENTS_UNIT.match(my_contents)
+
+		if m is not None:
+			my_unit = m.group(2)
+			my_value = m.group(1)
+
+			if RE_ACCEPTED_DISPLAY_UNITS.match(my_unit):
+				param_sheet.setDisplayUnit(value_cell, my_unit)
+				param_sheet.set(value_cell, my_value)
+				result = True
+
+	return result
+
+
+# format_calculated_cell(param_sheet, value_cell)
+#
+# Formats the value cell light gray if the description cell (adjacent to the right)
+# is formatted to indicate that the value cell is calculated
+#
+# This is indicated by starting the description cell with "[calculated]"
+#
+def format_calculated_cell(param_sheet, value_cell):
+	# get the 'description' cell to the right of the value
+	desc_cell = increment_column(value_cell)
+
+	if desc_cell is not None:
+		my_desc = param_sheet.getContents(desc_cell)
+
+		if RE_DESC_CALCULATED.match(my_desc) is not None:
+			# format as light gray
+			param_sheet.setBackground(value_cell, (0.752941,0.752941,0.752941))
+
 
 # change_alias(param_sheet, value_cell, alias, is_overwrite)
 #
 #  Changes the alias assigned to value_cell. If is_overwrite is True,
 #  it will first clear the alias and then change it. This is to
 #  prevent some reported issues from changing it directly.
+#
+#  If the alias is changed, it will then try to determine if the number
+#  has been specified with a unit then set that unit as the "display unit"
+#  for the cell (then later changes do not need to have the unit typed)
+#
+#  Finally, it looks at the cell to the right of the value cell. If this cell
+#  has contents that begin with "[calculated]" then it will format that cell
+#  with a gray background.
 #
 #  Returns True if the alias was changed successfully, False otherwise
 #
@@ -71,9 +199,16 @@ def change_alias(param_sheet, value_cell, alias, is_overwrite=False):
 			# clear the existing alias first, then recompute
 			param_sheet.setAlias(value_cell, '')
 			App.ActiveDocument.recompute()
+
 		# set the new alias
 		param_sheet.setAlias(value_cell, alias)
+
+		# change the display unit then format gray if calculated
+		change_display_unit(param_sheet, value_cell)
+		format_calculated_cell(param_sheet, value_cell)
+
 		App.ActiveDocument.recompute()
+
 	except:
 		# could be an invalid alias name or a duplicate alias
 		result = False
@@ -89,21 +224,21 @@ def realias_sheet(param_sheet):
 	row = 0
 	blank_rows = 0
 	had_change = False
-	
+
 	while True:
-	
+
 		# process each row until termination condition is met
 		row += 1
-	
+
 		param_cell = f'A{row}'
 		value_cell = f'B{row}'
-		
+
 		value_contents = None   # contents of the param_cell (may or may not be a param name)
-	
+
 		try:
-	
+
 			value_contents = param_sheet.get(param_cell)
-	
+
 			if len(value_contents) > 0:
 				blank_rows = 0  # reset blank cell counter
 			else:
@@ -112,29 +247,29 @@ def realias_sheet(param_sheet):
 				if blank_rows >= BLANK_ROWS:
 					# we have encountered the blank cell termination condition
 					break
-	
+
 		except:
-	
+
 			# empty cell -> interpret as blank line
 			blank_rows += 1
 			if blank_rows >= BLANK_ROWS:
 				# we have encountered the blank row termination condition
 				break
-	
+
 			continue
-	
+
 		if RE_NAME_REJECT.match(value_contents):
-	
+
 			# skip any cell named simply "Param"... it is probably a header row
 			# modify the RE_NAME_REJECT regex pattern to specify others to reject
 			continue
-	
+
 		elif RE_NAME.match(value_contents):
-	
+
 			# we have a valid param name in column A
 			# check for an existing alias
 			alias = param_sheet.getAlias(value_cell)
-	
+
 			if alias is not None:
 				if alias == value_contents:
 					# already set, nothing to do
@@ -146,7 +281,7 @@ def realias_sheet(param_sheet):
 						print(f'Changed the alias on cell {value_cell} to {value_contents} in sheet "{param_sheet.Label}"')
 					else:
 						print(f'Unable to change the alias on cell {value_cell} to {value_contents} in sheet "{param_sheet.Label}"')
-					
+
 					continue
 			else:
 				# for now, just set the alias
@@ -155,19 +290,22 @@ def realias_sheet(param_sheet):
 					print(f'Added a new alias on cell {value_cell} as {value_contents} in sheet "{param_sheet.Label}"')
 				else:
 					print(f'Unable to add the new alias on cell {value_cell} as {value_contents} in sheet "{param_sheet.Label}"')
-				
+
 				continue
-			
+
 		elif RE_TERMINATE.match(value_contents):
 			# we found the termination marker
 			break
-	
+
 		else:
 			continue
-	
+
 	if not had_change:
-	
 		print(f'No new changes were made to the spreadsheet aliases in sheet "{param_sheet.Label}"')
+	
+	else:
+		param_sheet.touch()
+		App.ActiveDocument.recompute()
 
 
 # ------------------------------------------------------------------------------
@@ -184,6 +322,6 @@ for obj in App.ActiveDocument.Objects:
 
 if param_sheet is None:
 	print('No valid sheet name was found')
-	
+
 
 # Kerry S. Martin, martin@wild-wood.net, June 18, 2024
