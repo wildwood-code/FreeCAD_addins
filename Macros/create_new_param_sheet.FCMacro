@@ -1,0 +1,71 @@
+"""
+This macro will generate a new spreadsheet for holding parameters:
+Column A is labeled 'Param' and holds the parameter name
+Column B is labeled 'Value' and holds the parameter value or calculation
+Column C is labeled 'Description'
+
+The spreadsheet name will be 'Spreadsheet' unless that name exists, then
+another name will be chosen. The spreadsheet label/alias will be 'Params'
+unless that one exists.
+
+This spreadsheet is intended to hold model parameters and is easily
+parameterized using the separate 'Param_alias_generator.FCMacro' macro.
+
+A small report is generated on the console.
+
+Kerry S. Martin, martin@wild-wood.net   2024-09-08
+
+"""
+
+
+def create_new_sheet(name, label):
+	try:
+		h = App.activeDocument().addObject('Spreadsheet::Sheet', name)
+
+		# try to label it, but don't panic if it does not work
+		try:
+			h.Label = label
+		except:
+			pass # don't panic
+			
+		h.set('A1', 'Param')
+		h.set('B1', 'Value')
+		h.set('C1', 'Description')
+		h.setStyle('A1:C1', 'bold')
+		h.setColumnWidth('C', 320);
+		h.touch()
+		App.ActiveDocument.recompute()
+		
+		return f"{h.Label}"
+
+	except:
+		return None
+
+
+# ------------------------------------------------------------------------------
+# Main program entry point
+# ------------------------------------------------------------------------------
+
+named = None
+
+while True:
+	
+	# The .addObject() method actually creates something even is there is the name
+	# already exists, so trying more than once is unnecessary, but I will keep it
+	# there anyway in case there is ever some alternate behavior in a future
+	# version of FreeCAD
+	
+	if (named := create_new_sheet("Spreadsheet", "Params")) is not None:
+		break
+	elif (named := create_new_sheet("Param_sheet", "Params")) is not None:
+		break;
+	else:
+		for i in range(1,11):
+			if (named := create_new_sheet(f"Param_sheet_{i:02}", f"Params_{i:02}")) is not None:
+				break
+	break
+
+if named is not None:
+	print(f"Created a new spreadsheet with label '{named}'")
+
+# Kerry S. Martin, martin@wild-wood.net, September 8, 2024

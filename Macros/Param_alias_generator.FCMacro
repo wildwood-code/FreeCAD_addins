@@ -1,50 +1,58 @@
 """
-This macro will generate aliases for cells in column B based upon a
-parameter name in column A. It has a few features to help control
-the behavior.
+This macro processes all spreadsheets that match a naming pattern for parameter
+sheets. Several actions are performed:
+	-- generates aliases for parameter values
+	-- changes the display unit for the value cell if a unit is specified
+	-- changes value cell coloration if certain tags are in the description
 
-This macro will operate on sheets with a certain name (case-insensitive):
-  Params, Param, P, Params_<anything>, Param_<anything>, P_<anything>
-It will operate on all sheets matching the naming pattern
+Alias generation:
+	The parameter name is specified in column A. If the contents of a cell in
+	column A matches a parameter name pattern, an alias is generated for the
+	value cell which is in column B in the same row.
 
-Rows will be processed starting at row 1 and continuing until a
-termination condition is met. Termination occurs after 10 consecutive
-rows all having the column A cell contants blank, or if the cell contents
-begin with two or more dashes:
-ex/ --, --END--, --- END PARAMETERS ---, -----
+	This macro will only change the alias of a cell if it is blank or different.
+	Note that if the alias is changed, any references to that alias in the part
+	or body will revert to a cell reference rather than an alias.
 
-Any column A cell contents having an invalid param name is skipped.
-A valid param name starts with a letter, has an optional underscore,
-and is followed by at least one letter, number, or underscore.
-(ex/ W_base, T_main_assembly)
-Certain param names will be rejected, even if otherwise valid:
-Param or Params (case-insensitive) as these are often used as a header label
-One or two letters followed only by numbers as these are cell coordinates
+Display unit:
+	If the value cell in column B matches a pattern indicating that a specific
+	unit was typed in when the value was entered, the display unit for that cell
+	is changed to the typed unit and the value is set to the unitless number.
+	In this way, the unit never has to be typed again when changing the value.
+	Only a few units are accepted at this time: mm|deg|°
+	
+Cell coloration:
+	If the description cell in column C is prefixed with certain tags, the value
+	cell in column B of the same row has its colors changed.
+	[calculation] [calculated] [calc]  => light gray bg, black fg
+	[fixed] [const] [constant]         => darg gray bg, white fg
+	
+Spreadsheets affected:
+	This macro will operate on sheets with a certain name (case-insensitive):
+		Params, Param, P, Params_<anything>, Param_<anything>, P_<anything>
+	The macro will operate on all sheets matching the naming pattern.
+	The macro may be run repeatedly on the spreadsheet.
 
-If a valid param name is found in column A, then the alias is applied
-to the cell in the same row in column B. The contents of the cell are unchaged.
-However, the formatting is automatically changed when applying an alias.
+Termination condition:
+	Rows will be processed starting at row 1 and continuing until a	termination
+	condition is met. Termination occurs after 10 consecutive rows all having
+	the column A cell contants blank, or if the cell contents begin with two or
+	more dashes:  ex/ --, --END--, --- END PARAMETERS ---, -----
 
-This macro will only change the alias of a cell if it is blank or different.
-Note that if the alias is changed, any references to that alias in the part
-or body will revert to a cell reference rather than an alias.
+Valid param names:
+	Any column A cell contents having an invalid param name is skipped.
+	A valid param name starts with a letter, has an optional underscore, and is
+	followed by at least one letter, number, or underscore.
 
-It may be run repeatedly on the spreadsheet.
+	Certain param names will be rejected, even if otherwise valid:
+	Param or Params (case-insensitive) as these are often used as a header label
+	One or two letters followed only by numbers as these are cell coordinates
 
-In addition to changing the alias, the macro will attempt to change the display
-name of the value cell in column B if an accepted unit is specified in the cell
-contents. For example, if "4.5 mm" is entered, the display unit is changed to
-"mm" and the cell contents is changed to simply "4.5". If the value is subsequently
-changed by the user, the units will not need to be retyped.
-Note that this only works correctly for the base units (mm and deg).
+Report:
+	A short text report is emitted from the macro showing the changes, if any.
 
-Finally, the value cell in column B will be shaded gray if it is specified as
-a calculated cell buy leading the description in column C with "[calculated]".
-
-A short text report is emitted from the macro showing the changes, if any.
-
-Kerry S. Martin, martin@wild-wood.net   2024-08-18
-
+Author:
+	Kerry S. Martin, martin@wild-wood.net   2024-09-21
 """
 import FreeCAD
 import re
@@ -77,21 +85,35 @@ RE_CELL_DISSECT = re.compile(r'^([A-Za-z]{1,2})([0-9]+)$')
 # description column follows the value column
 # start the description with "[calculated]" to designate that the value is calculated
 # and the cell will be shaded gray
-RE_DESC_CALCULATED = re.compile(r"^'?\[CALC(?:ULATED)?\]", re.IGNORECASE)
+RE_DESC_CALCULATED = re.compile(r"^'?\[CALC(?:ULATED|ULATION)?\]", re.IGNORECASE)
+
+# regex pattern to match a "[fixed]" or "[constant]" tag in the description column
+RE_DESC_FIXED = re.compile(r"^'?\[(?:FIXED|CONST|CONSTANT)]", re.IGNORECASE)
 
 # regex pattern to match accepted display units
 # add any additional display units that are needed to this regex
 RE_ACCEPTED_DISPLAY_UNITS = re.compile(r"^(?:mm|deg|°)$")
 
+# cell coloration constants
+COLOR_BG_FIXED = (0.501960813999176,0.501960813999176,0.501960813999176,1.0)
+COLOR_FG_FIXED = (1.0, 1.0, 1.0, 1.0)
+COLOR_BG_CALC = (0.7529410123825073,0.7529410123825073,0.7529410123825073,1.0)
+COLOR_FG_CALC = (0.0, 0.0, 0.0, 1.0)
 
-# increment_column(cell)
-#
-# Increments the column index to the column to the right of the given cell
-# The row is unchanged
-#
-# ex/ "B15" -> "C15",  "Z7" -> "AA27"
-#
+
 def increment_column(cell):
+	"""Increment the column index without changing the row.
+	
+	Parameters
+	----------
+	cell : str
+	  cell coordinate to increment (ex/ 'B15')
+	
+	Returns
+	-------
+	str
+	  incremented cell coordinate (ex/ 'C15')
+	"""
 
 	next_cell = None
 	m = RE_CELL_DISSECT.match(cell)
@@ -125,17 +147,49 @@ def increment_column(cell):
 	return next_cell
 
 
-# change_display_unit(param_sheet, value_cell)
-#
-# Changes the display unit property for the given value cell if the cell
-# is a numeric entry field with a unit. This allows efficient definition
-# of new parameter values.
-#
-# This willl only change the display unit if it is not already set
-# This will only change if the unit is a commonly used 3D CAD unit (e.g., mm, cm, in, deg, etc.)
-# More specific units can be added to the regex RE_ACCEPTED_DISPLAY_UNITS
-#
+def is_color_close(c1, c2, tol=0.0001):
+	""" Determines if two given color tuples are "close" (i.e. within tolerance)
+	
+	Parameters
+	----------
+	c1, c2 : tuple
+	  color tuples ex/ (red, green, blue, opacity)
+	tol : float {default = 0.0001}
+	  tolerance, must be a non-negative number
+	
+	Returns
+	-------
+	bool
+	  True if the colors match, False otherwise
+	"""
+	
+	result = True
+	
+	if ( c1 is None ) or ( c2 is None ) or ( len(c1) != len(c2) ):
+		result = False
+	else:
+		for i in range(len(c1)):
+			if abs(c1[i]-c2[i])>tol:
+				result = False
+				break
+	
+	return result
+
+
 def change_display_unit(param_sheet, value_cell):
+	""" Change the display unit of the velue cell in the param sheet
+	
+	Parameters
+	----------
+	param_sheet : <Sheet object>
+	value_cell : str
+	  the cell coordinate (ex/ 'B15')
+	
+	Returns
+	-------
+	bool
+	  True if a change was made, False otherwise
+	"""
 
 	result = False
 	my_unit = param_sheet.getDisplayUnit(value_cell)
@@ -157,14 +211,23 @@ def change_display_unit(param_sheet, value_cell):
 	return result
 
 
-# format_calculated_cell(param_sheet, value_cell)
-#
-# Formats the value cell light gray if the description cell (adjacent to the right)
-# is formatted to indicate that the value cell is calculated
-#
-# This is indicated by starting the description cell with "[calculated]"
-#
 def format_calculated_cell(param_sheet, value_cell):
+	""" Change the coloration of the value cell if tagged in the description.
+	
+	Parameters
+	----------
+	param_sheet : <Sheet object>
+	value_cell : str
+	  the cell coordinates (ex/ 'B15')
+	  the description cell is in the next column (ex/ 'C15')
+	
+	Returns
+	-------
+	bool
+	  True if a change was made, False otherwise
+	"""
+	
+	result = False
 	# get the 'description' cell to the right of the value
 	desc_cell = increment_column(value_cell)
 
@@ -173,27 +236,44 @@ def format_calculated_cell(param_sheet, value_cell):
 
 		if RE_DESC_CALCULATED.match(my_desc) is not None:
 			# format as light gray
-			param_sheet.setBackground(value_cell, (0.752941,0.752941,0.752941))
+			c = param_sheet.getBackground(value_cell)
+			if not is_color_close(c, COLOR_BG_CALC):
+				param_sheet.setBackground(value_cell, COLOR_BG_CALC)
+				param_sheet.setForeground(value_cell, COLOR_FG_CALC)
+				result = True
+			
+		elif RE_DESC_FIXED.match(my_desc) is not None:
+			# format as dark gray with white text
+			c = param_sheet.getBackground(value_cell)
+			if not is_color_close(c, COLOR_BG_FIXED):
+				param_sheet.setBackground(value_cell, COLOR_BG_FIXED)
+				param_sheet.setForeground(value_cell, COLOR_FG_FIXED)
+				result = True
+			
+	return result
+			
 
-
-# change_alias(param_sheet, value_cell, alias, is_overwrite)
-#
-#  Changes the alias assigned to value_cell. If is_overwrite is True,
-#  it will first clear the alias and then change it. This is to
-#  prevent some reported issues from changing it directly.
-#
-#  If the alias is changed, it will then try to determine if the number
-#  has been specified with a unit then set that unit as the "display unit"
-#  for the cell (then later changes do not need to have the unit typed)
-#
-#  Finally, it looks at the cell to the right of the value cell. If this cell
-#  has contents that begin with "[calculated]" then it will format that cell
-#  with a gray background.
-#
-#  Returns True if the alias was changed successfully, False otherwise
-#
 def change_alias(param_sheet, value_cell, alias, is_overwrite=False):
+	""" Changes the alias assigned to the value cell
+	
+	Parameters
+	----------
+	param_sheet : <Sheet object>
+	value_cell : str
+	  the cell coordinates (ex/ 'B15')
+	alias : str
+	  the alias to which the value cell will be changed
+	is_overwrite : bool {default = False}
+	  if True, clear alias first the recalculate before changing alias
+	
+	Returns
+	-------
+	bool
+	  True if the alias was changed, False otherwise
+	"""
+	
 	result = True
+	
 	try:
 		if is_overwrite:
 			# clear the existing alias first, then recompute
@@ -203,12 +283,6 @@ def change_alias(param_sheet, value_cell, alias, is_overwrite=False):
 		# set the new alias
 		param_sheet.setAlias(value_cell, alias)
 
-		# change the display unit then format gray if calculated
-		change_display_unit(param_sheet, value_cell)
-		format_calculated_cell(param_sheet, value_cell)
-
-		App.ActiveDocument.recompute()
-
 	except:
 		# could be an invalid alias name or a duplicate alias
 		result = False
@@ -216,11 +290,17 @@ def change_alias(param_sheet, value_cell, alias, is_overwrite=False):
 	return result
 
 
-# realias_sheet(param_sheet)
-#
-#  Process all parameter alias names in the spreadsheet
-#
 def realias_sheet(param_sheet):
+	""" Process all parameter alias names in the spreadsheet
+	
+	Parameters
+	----------
+	param_sheet : <Sheet object>
+
+	Returns
+	-------
+	None
+	"""
 	row = 0
 	blank_rows = 0
 	had_change = False
@@ -273,7 +353,7 @@ def realias_sheet(param_sheet):
 			if alias is not None:
 				if alias == value_contents:
 					# already set, nothing to do
-					continue
+					pass
 				else:
 					# change it to the new name (assume it was already a valid value at some point)
 					if change_alias(param_sheet, value_cell, value_contents, is_overwrite=True):
@@ -282,7 +362,6 @@ def realias_sheet(param_sheet):
 					else:
 						print(f'Unable to change the alias on cell {value_cell} to {value_contents} in sheet "{param_sheet.Label}"')
 
-					continue
 			else:
 				# for now, just set the alias
 				if change_alias(param_sheet, value_cell, value_contents):
@@ -290,8 +369,17 @@ def realias_sheet(param_sheet):
 					print(f'Added a new alias on cell {value_cell} as {value_contents} in sheet "{param_sheet.Label}"')
 				else:
 					print(f'Unable to add the new alias on cell {value_cell} as {value_contents} in sheet "{param_sheet.Label}"')
-
-				continue
+				
+			# change the display unit then format gray if calculated
+			if change_display_unit(param_sheet, value_cell):
+				print(f'Changed the display unit on cell {value_cell} in sheet "{param_sheet.Label}"')
+				had_change = True
+			if format_calculated_cell(param_sheet, value_cell):
+				print(f'Changed the formatting on cell {value_cell} in sheet "{param_sheet.Label}"')
+				had_change = True
+				
+			continue
+				
 
 		elif RE_TERMINATE.match(value_contents):
 			# we found the termination marker
@@ -324,4 +412,4 @@ if param_sheet is None:
 	print('No valid sheet name was found')
 
 
-# Kerry S. Martin, martin@wild-wood.net, June 18, 2024
+# Kerry S. Martin, martin@wild-wood.net, September 21, 2024

@@ -1,0 +1,11 @@
+# Find the parameter sheets and re-alias them
+param_sheet = None
+
+for obj in App.ActiveDocument.Objects:
+	if obj.TypeId == 'Spreadsheet::Sheet':
+		param_sheet = obj
+		break
+
+
+if param_sheet is None:
+	print('No valid sheet name was found')
