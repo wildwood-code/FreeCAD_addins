@@ -13,12 +13,25 @@ parameterized using the separate 'Param_alias_generator.FCMacro' macro.
 
 A small report is generated on the console.
 
-Kerry S. Martin, martin@wild-wood.net   2024-09-08
+Kerry S. Martin, martin@wild-wood.net   2024-09-21
 
 """
 
 
 def create_new_sheet(name, label):
+	"""Create a new sheet (attempt to do so with the given name and label)
+	
+	Parameters
+	----------
+	name : str
+	label : str
+	 
+	Returns
+	-------
+	str | None
+	  if successful, return the label of the new sheet
+	  if unsuccessful, return None
+	"""
 	try:
 		h = App.activeDocument().addObject('Spreadsheet::Sheet', name)
 
@@ -68,4 +81,4 @@ while True:
 if named is not None:
 	print(f"Created a new spreadsheet with label '{named}'")
 
-# Kerry S. Martin, martin@wild-wood.net, September 8, 2024
+# Kerry S. Martin, martin@wild-wood.net, September 21, 2024

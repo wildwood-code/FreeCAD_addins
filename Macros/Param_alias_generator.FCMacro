@@ -17,8 +17,7 @@ Alias generation:
 Display unit:
 	If the value cell in column B matches a pattern indicating that a specific
 	unit was typed in when the value was entered, the display unit for that cell
-	is changed to the typed unit and the value is set to the unitless number.
-	In this way, the unit never has to be typed again when changing the value.
+	is changed to the typed unit.
 	Only a few units are accepted at this time: mm|deg|°
 	
 Cell coloration:
@@ -101,13 +100,15 @@ COLOR_BG_CALC = (0.7529410123825073,0.7529410123825073,0.7529410123825073,1.0)
 COLOR_FG_CALC = (0.0, 0.0, 0.0, 1.0)
 
 
-def increment_column(cell):
+def increment_column(cell, incr=1):
 	"""Increment the column index without changing the row.
 	
 	Parameters
 	----------
 	cell : str
 	  cell coordinate to increment (ex/ 'B15')
+	incr : int {default=1}
+	  amount to increment (+ increment, - decrement)
 	
 	Returns
 	-------
@@ -116,31 +117,33 @@ def increment_column(cell):
 	"""
 
 	next_cell = None
-	m = RE_CELL_DISSECT.match(cell)
 
-	if m is not None:
-		my_col = m.group(1)
+	if (m := RE_CELL_DISSECT.match(cell)) is not None:
+		# grab the column and row
+		my_col = m.group(1).upper()
 		my_row = m.group(2)
+		
+		# calculate the zero-based numeric column index
+		my_col_idx = ord(my_col[0])-ord('A')
+		if len(my_col) > 1:
+			# 2 character column index
+			my_col_idx = (my_col_idx+1)*26 + ord(my_col[1])-ord('A')
 
-		if len(my_col)>1:
-			# format 'AA' - 'ZZ', possible wrap "AZ" -> "BZ", etc
-			# fail if 'ZZ'
-			my_col_a = my_col[0]
-			my_col_b = my_col[1]
-			my_col_b = chr(ord(my_col_b)+1)
-			if my_col_b > "Z":
-				my_col_b = "A"
-				my_col_a = chr(ord(my_col_a)+1)
-				if my_col_a <= "Z":
-					my_col = my_col_a + my_col_b
-				else:
-					my_col = None
+		# adjust for increment/decrement
+		my_col_idx = my_col_idx + incr
+		
+		if my_col_idx>=0 and my_col_idx<702:
+			# determine the new alpha column index
+			my_major_col = my_col_idx // 26
+			if my_major_col > 0:
+				my_col = chr(my_major_col-1+ord('A')) + chr((my_col_idx%26)+ord('A'))
+			else:
+				my_col = chr(my_col_idx+ord('A'))
 		else:
-			# format 'A' - 'Z', possible wrap from "Z" to "AA"
-			my_col = chr(ord(my_col)+1)
-			if my_col>"Z":
-				my_col = "AA"
-
+			# outside of range 'A' to 'ZZ'
+			my_col = None
+		
+		# the new coordinate is the alpha column and numeric row
 		if my_col is not None:
 			next_cell = my_col + my_row
 
@@ -163,11 +166,12 @@ def is_color_close(c1, c2, tol=0.0001):
 	  True if the colors match, False otherwise
 	"""
 	
-	result = True
+	result = True   # unless changed to False
 	
 	if ( c1 is None ) or ( c2 is None ) or ( len(c1) != len(c2) ):
 		result = False
 	else:
+		# if any value-pair is not within tolerance, then the result is False
 		for i in range(len(c1)):
 			if abs(c1[i]-c2[i])>tol:
 				result = False
@@ -195,17 +199,16 @@ def change_display_unit(param_sheet, value_cell):
 	my_unit = param_sheet.getDisplayUnit(value_cell)
 
 	if my_unit is None:
-		#my_cell = param_sheet.get(value_cell)
 		my_contents = param_sheet.getContents(value_cell)
 		m = RE_CONTENTS_UNIT.match(my_contents)
 
 		if m is not None:
 			my_unit = m.group(2)
-			my_value = m.group(1)
+			#my_value = m.group(1)
 
 			if RE_ACCEPTED_DISPLAY_UNITS.match(my_unit):
 				param_sheet.setDisplayUnit(value_cell, my_unit)
-				param_sheet.set(value_cell, my_value)
+				#param_sheet.set(value_cell, my_value)  # KSM: disabled this for now
 				result = True
 
 	return result
@@ -410,6 +413,7 @@ for obj in App.ActiveDocument.Objects:
 
 if param_sheet is None:
 	print('No valid sheet name was found')
+	
 
 
 # Kerry S. Martin, martin@wild-wood.net, September 21, 2024
